@@ -40,25 +40,28 @@ So that's really the entire protocol:
 - Send one 32 bit color frame per LED on the strip to data-in of the first LED
 - Finish off by cycling the clock line a few times to get all data to the very last LED on the strip
 """
+
+
 class APA102:
-    def __init__(self, numLEDs, globalBrightness = 31): # The number of LEDs in the Strip
-        self.numLEDs = numLEDs
-        # LED startframe is three "1" bits, followed by 5 brightness bits
-        self.ledstart = (globalBrightness & 0b00011111) | 0b11100000 # Don't validate, just slash of extra bits
-        self.leds = [] # Pixel buffer
-        for _ in range(self.numLEDs): # Allocate the entire buffer. If later some LEDs are not set,
-            self.leds.extend([self.ledstart]) # they will just be black,
-            self.leds.extend([0x00] * 3) #  instead of crashing the driver.
+    def __init__(self, led_count, brightness=31, spi_port=0, slave_device=1, hz=8000000):
+        self.led_count = led_count
+        # LED start frame is three "1" bits, followed by 5 brightness bits
+        self.ledstart = (brightness & 0b00011111) | 0b11100000  # Don't validate, just slash of extra bits
+        self.leds = []  # Pixel buffer
+        for _ in range(self.led_count):  # Allocate the entire buffer. If later some LEDs are not set,
+            self.leds.extend([self.ledstart])  # they will just be black,
+            self.leds.extend([0x00] * 3)  # instead of crashing the driver.
         self.spi = spidev.SpiDev()  # Init the SPI device
-        self.spi.open(0, 1)  # Open SPI port 0, slave device (CS)  1
-        self.spi.max_speed_hz=8000000 # Up the speed a bit, so that the LEDs are painted faster
-    
+        self.spi.open(spi_port, slave_device)  # Open SPI port spi_port(0), slave device (CS)  slave_device(1)
+        self.spi.max_speed_hz = hz  # Up the speed a bit, so that the LEDs are painted faster
+
     """
     This method clocks out a start frame, telling the receiving LED that it must update its own color now.
     """
-    def clockStartFrame(self):
+
+    def clock_start_frame(self):
         _ = self.spi.xfer2([0x00, 0x00, 0x00, 0x00])  # Start frame, 32 zero bits
-    
+
     """
     The end frame is not really a data package. Its purpose is to trigger additional clock pulses. The clock pulses
     are required because of the way SPI works. In SPI, the first step is to set a stable data signal. Then, the
@@ -70,78 +73,87 @@ class APA102:
     It readies its data-out, and as soon as the LED one input clock is lowered in order to prepare the next input for
     LED one, the clock-out of LED one is raised, and LED 2 can read the data line. 
     This goes on like this through the entire strip. Each LED delays its data-out by 1/2 clock cycle by inverting the 
-    clock signal. At the end of the strip, we are numLEDs/2 clock cycles behind. Usually this means that the last LED did not
+    clock signal. At the end of the strip, we are led_count/2 clock cycles behind. Usually this means that the last LED did not
     yet receive all of its data (32 bits is a full LED data frame, so if the strip has 64 LEDs or less, then only the last LED
     is affected).
-    Ultimately, we need to send additional numLEDs/2 arbitrary data bits, in order to trigger numLEDs/2 additional clock
+    Ultimately, we need to send additional led_count/2 arbitrary data bits, in order to trigger led_count/2 additional clock
     changes. This driver sends zeroes, which has the benefit of getting LED one partially or fully ready for the next update
     to the strip. An optimized version of the driver could omit the "clockStartFrame" method if enough zeroes have 
     been sent as part of "clockEndFrame".
     """
-    def clockEndFrame(self):
-        for _ in range((self.numLEDs + 15) // 16):  # Round up numLEDs/2 bits (or numLEDs/16 bytes)
+
+    def clock_end_frame(self):
+        for _ in range((self.led_count + 15) // 16):  # Round up led_count/2 bits (or led_count/16 bytes)
             self.spi.xfer2([0x00])
 
     """
     Sets the color for the entire strip to black, and immediately shows the result.
     """
-    def clearStrip(self):
-        self.spi.xfer2([self.ledstart, 0x00, 0x00, 0x00] * self.numLEDs)
-        self.clockEndFrame() # ... and clock the end frame so that also the last LED(s) shut down.
+
+    def clear_strip(self):
+        self.spi.xfer2([self.ledstart, 0x00, 0x00, 0x00] * self.led_count)
+        self.clock_end_frame()  # ... and clock the end frame so that also the last LED(s) shut down.
 
     """
     Sets the color of one pixel in the LED stripe. The changed pixel is not shown yet on the Stripe, it is only
     written to the pixel buffer. Colors are passed individually.
     """
-    def setPixel(self, ledNum, red, green, blue):
-        if ledNum < 0:
-            return # Pixel is invisible, so ignore
-        if ledNum >= self.numLEDs:
-            return # again, invsible
-        startIndex = 4 * ledNum
-        self.leds[startIndex] = self.ledstart
-        self.leds[startIndex+3] = red
-        self.leds[startIndex+1] = green
-        self.leds[startIndex+2] = blue
-        
+
+    def set_pixel(self, led_num, red, green, blue):
+        if led_num < 0:
+            return  # Pixel is invisible, so ignore
+        if led_num >= self.led_count:
+            return  # again, invisible
+        start_index = 4 * led_num
+        self.leds[start_index] = self.ledstart
+        self.leds[start_index + 3] = red
+        self.leds[start_index + 1] = green
+        self.leds[start_index + 2] = blue
+
     """
     Sets the color of one pixel in the LED stripe. The changed pixel is not shown yet on the Stripe, it is only
     written to the pixel buffer. Colors are passed combined (3 bytes concatenated)
     """
-    def setPixelRGB(self, ledNum, rgbColor):
-        self.setPixel(ledNum, (rgbColor & 0xFF0000) >> 16, (rgbColor & 0x00FF00) >> 8, rgbColor & 0x0000FF)
+
+    def set_pixel_rgb(self, led_num, rgb_color):
+        self.set_pixel(led_num, (rgb_color & 0xFF0000) >> 16, (rgb_color & 0x00FF00) >> 8, rgb_color & 0x0000FF)
 
     """
     Sends the content of the pixel buffer to the strip.
     Todo: More than 1024 LEDs requires more than one xfer operation.
     """
+
     def show(self):
-        self.clockStartFrame()
-        self.spi.xfer2(self.leds) # SPI takes up to 4096 Integers. So we are fine for up to 1024 LEDs. 
-        self.clockEndFrame()
+        self.clock_start_frame()
+        self.spi.xfer2(self.leds)  # SPI takes up to 4096 Integers. So we are fine for up to 1024 LEDs.
+        self.clock_end_frame()
 
     """
     This method should be called at the end of a program in order to release the SPI device
     """
+
     def cleanup(self):
-        self.spi.close()  # ... SPI Port schliessen
-        
+        self.spi.close()  # ... close SPI Port
+
     """
      Make one 3*8 byte color value
     """
-    def combineColor(self, red, green, blue):
+
+    @staticmethod
+    def combine_color(red, green, blue):
         return (red << 16) + (green << 8) + blue
 
     """
     Get a color from a color wheel
     Green -> Red -> Blue -> Green
     """
-    def wheel(self, wheelPos):
-        if wheelPos < 85: # Green -> Red
-            return self.combineColor(wheelPos * 3, 255 - wheelPos * 3, 0)
-        elif wheelPos < 170: # Red -> Blue
-            wheelPos -= 85
-            return self.combineColor(255 - wheelPos * 3, 0, wheelPos * 3)
-        else: # Blue -> Green
-            wheelPos -= 170
-            return self.combineColor(0, wheelPos * 3, 255 - wheelPos * 3);
+
+    def wheel(self, wheel_pos):
+        if wheel_pos < 85:  # Green -> Red
+            return self.combine_color(wheel_pos * 3, 255 - wheel_pos * 3, 0)
+        elif wheel_pos < 170:  # Red -> Blue
+            wheel_pos -= 85
+            return self.combine_color(255 - wheel_pos * 3, 0, wheel_pos * 3)
+        else:  # Blue -> Green
+            wheel_pos -= 170
+            return self.combine_color(0, wheel_pos * 3, 255 - wheel_pos * 3)
