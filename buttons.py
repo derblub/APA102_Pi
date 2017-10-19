@@ -41,4 +41,4 @@ def butt(channel):
         lastClock = clock()
 
 
-gpio.add_event_detect(REBOOT_PIN, gpio.BOTH, callback=Butt)
+gpio.add_event_detect(REBOOT_PIN, gpio.BOTH, callback=butt)
